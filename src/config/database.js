@@ -47,6 +47,31 @@ async function initDB() {
       ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     `);
     console.log('[DB] symptoms 테이블 준비 완료');
+
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS medicine_searches (
+        id               INT AUTO_INCREMENT PRIMARY KEY,
+        user_id          INT      NOT NULL,
+        input_text       TEXT     NOT NULL COMMENT '사용자 입력 (증상/상태)',
+        recommendations  JSON     COMMENT 'AI 추천 약 목록',
+        created_at       DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    `);
+    console.log('[DB] medicine_searches 테이블 준비 완료');
+
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS doctor_notes (
+        id              INT AUTO_INCREMENT PRIMARY KEY,
+        user_id         INT          NOT NULL,
+        original_text   LONGTEXT     COMMENT 'Whisper 변환 원문',
+        summary         JSON         COMMENT 'GPT 요약 결과',
+        visit_date      DATE         COMMENT '진료 날짜',
+        created_at      DATETIME     DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    `);
+    console.log('[DB] doctor_notes 테이블 준비 완료');
   } finally {
     conn.release();
   }

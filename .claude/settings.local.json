@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "WebFetch(domain:www.data.go.kr)"
+      "WebFetch(domain:www.data.go.kr)",
+      "Bash(npm list:*)"
     ]
   }
 }

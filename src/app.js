@@ -7,6 +7,8 @@ const weatherRoutes = require('./routes/weatherRoutes');
 const diseaseRoutes = require('./routes/diseaseRoutes');
 const pharmacyRoutes = require('./routes/pharmacyRoutes');
 const symptomRoutes  = require('./routes/symptomRoutes');
+const medicineRoutes    = require('./routes/medicineRoutes');
+const doctorNoteRoutes  = require('./routes/doctorNoteRoutes');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -27,6 +29,8 @@ app.use('/weather', weatherRoutes);
 app.use('/disease', diseaseRoutes);
 app.use('/pharmacy', pharmacyRoutes);
 app.use('/symptom',  symptomRoutes);
+app.use('/medicine',    medicineRoutes);
+app.use('/doctor-note', doctorNoteRoutes);
 
 // 404 핸들러
 app.use((req, res) => {

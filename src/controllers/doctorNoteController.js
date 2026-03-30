@@ -1,13 +1,30 @@
-const OpenAI     = require('openai');
-const axios      = require('axios');
-const FormData   = require('form-data');
-const fs         = require('fs');
-const path       = require('path');
-const os         = require('os');
-const { pool }   = require('../config/database');
+const OpenAI   = require('openai');
+const axios    = require('axios');
+const FormData = require('form-data');
+const { pool } = require('../config/database');
 require('dotenv').config();
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+// 매직 바이트로 실제 오디오 포맷 감지
+function detectAudioFormat(buffer) {
+  const b = buffer;
+  // WebM / MKV: 1A 45 DF A3
+  if (b[0] === 0x1a && b[1] === 0x45 && b[2] === 0xdf && b[3] === 0xa3) return 'webm';
+  // MP4 / M4A: ftyp (bytes 4~7)
+  if (b[4] === 0x66 && b[5] === 0x74 && b[6] === 0x79 && b[7] === 0x70) return 'm4a';
+  // MP3: ID3 태그 또는 FF FB/F3/F2
+  if (b[0] === 0x49 && b[1] === 0x44 && b[2] === 0x33) return 'mp3';
+  if (b[0] === 0xff && (b[1] === 0xfb || b[1] === 0xf3 || b[1] === 0xf2)) return 'mp3';
+  // WAV: RIFF
+  if (b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46) return 'wav';
+  // OGG: OggS
+  if (b[0] === 0x4f && b[1] === 0x67 && b[2] === 0x67 && b[3] === 0x53) return 'ogg';
+  // FLAC: fLaC
+  if (b[0] === 0x66 && b[1] === 0x4c && b[2] === 0x61 && b[3] === 0x43) return 'flac';
+  // 감지 실패 시 확장자 그대로 사용
+  return null;
+}
 
 const SUMMARY_PROMPT = `당신은 노인을 위한 진료 내용 요약 AI입니다.
 아래 진료 대화 내용을 읽고, 노인이 이해하기 쉽게 핵심 내용을 정리해주세요.
@@ -58,27 +75,29 @@ async function createDoctorNote(req, res) {
     const audioBuffer = req.file.buffer;
     const fileName    = req.file.originalname || 'audio.mp3';
 
-    const ext     = fileName.split('.').pop().toLowerCase();
+    // 매직 바이트로 실제 포맷 감지 (확장자가 틀릴 수 있음)
+    const originalExt  = fileName.split('.').pop().toLowerCase();
+    const detectedExt  = detectAudioFormat(audioBuffer) || originalExt;
     const mimeMap = {
       'm4a': 'audio/mp4', 'mp3': 'audio/mpeg', 'mp4': 'audio/mp4',
       'wav': 'audio/wav', 'webm': 'audio/webm', 'ogg': 'audio/ogg',
-      'flac': 'audio/flac', 'mpeg': 'audio/mpeg', 'mpga': 'audio/mpeg',
+      'flac': 'audio/flac',
     };
-    const mimeType = mimeMap[ext] || 'audio/mp4';
-    const tmpPath  = path.join(os.tmpdir(), `audio.${ext}`);
-    fs.writeFileSync(tmpPath, audioBuffer);
+    const mimeType = mimeMap[detectedExt] || 'audio/mp4';
+
+    console.log('[Whisper 파일 감지]', { original: fileName, detected: detectedExt, mimeType, size: audioBuffer.length });
+
+    const form = new FormData();
+    form.append('file', audioBuffer, {
+      filename:    `audio.${detectedExt}`,
+      contentType: mimeType,
+      knownLength: audioBuffer.length,
+    });
+    form.append('model',    'whisper-1');
+    form.append('language', 'ko');
 
     let originalText;
     try {
-      // OpenAI SDK 우회 → axios + form-data 직접 호출 (Windows 경로 문제 해결)
-      const form = new FormData();
-      form.append('file', fs.createReadStream(tmpPath), {
-        filename:    `audio.${ext}`,
-        contentType: mimeType,
-      });
-      form.append('model',    'whisper-1');
-      form.append('language', 'ko');
-
       const whisperRes = await axios.post(
         'https://api.openai.com/v1/audio/transcriptions',
         form,
@@ -88,11 +107,13 @@ async function createDoctorNote(req, res) {
             Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
           },
           maxBodyLength: Infinity,
+          maxContentLength: Infinity,
         }
       );
       originalText = whisperRes.data.text;
-    } finally {
-      try { fs.unlinkSync(tmpPath); } catch (_) {}
+    } catch (axiosErr) {
+      console.error('[Whisper 오류]', JSON.stringify(axiosErr.response?.data, null, 2));
+      throw axiosErr;
     }
 
 

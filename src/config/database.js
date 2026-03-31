@@ -80,6 +80,14 @@ async function initDB() {
     `).catch(() => {}); // 이미 있으면 무시
     console.log('[DB] doctor_notes 테이블 준비 완료');
 
+    // guardian_phone 컬럼 없으면 추가
+    await conn.query(`
+      ALTER TABLE users
+      ADD COLUMN IF NOT EXISTS guardian_phone VARCHAR(20) COMMENT '보호자 연락처'
+      AFTER guardian_email
+    `).catch(() => {});
+    console.log('[DB] users.guardian_phone 컬럼 준비 완료');
+
     await conn.query(`
       CREATE TABLE IF NOT EXISTS medicine_schedules (
         id            INT AUTO_INCREMENT PRIMARY KEY,

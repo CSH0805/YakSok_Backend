@@ -245,6 +245,7 @@ async function getMe(req, res) {
         address: user.address,
         profile_image: user.profile_image,
         guardian_email: user.guardian_email,
+        guardian_phone: user.guardian_phone,
         is_registered: !!user.is_registered,
         created_at: user.created_at,
       },

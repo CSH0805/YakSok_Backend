@@ -8,6 +8,7 @@ const {
   getMe,
   logout,
 } = require('../controllers/authController');
+const { updateGuardian } = require('../controllers/notifyController');
 
 // 카카오 로그인 URL 조회
 router.get('/kakao', getKakaoAuthUrl);
@@ -20,6 +21,9 @@ router.post('/register', authenticate, register);
 
 // 내 정보 조회 (정식 토큰 + 회원가입 완료 필요)
 router.get('/me', authenticate, requireRegistered, getMe);
+
+// 보호자 연락처 등록/수정
+router.put('/guardian', authenticate, requireRegistered, updateGuardian);
 
 // 로그아웃
 router.post('/logout', authenticate, logout);

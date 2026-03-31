@@ -9,6 +9,7 @@ const pharmacyRoutes = require('./routes/pharmacyRoutes');
 const symptomRoutes  = require('./routes/symptomRoutes');
 const medicineRoutes    = require('./routes/medicineRoutes');
 const doctorNoteRoutes  = require('./routes/doctorNoteRoutes');
+const scheduleRoutes    = require('./routes/scheduleRoutes');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -31,6 +32,7 @@ app.use('/pharmacy', pharmacyRoutes);
 app.use('/symptom',  symptomRoutes);
 app.use('/medicine',    medicineRoutes);
 app.use('/doctor-note', doctorNoteRoutes);
+app.use('/schedule',    scheduleRoutes);
 
 // 404 핸들러
 app.use((req, res) => {

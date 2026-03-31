@@ -1,26 +1,18 @@
 const express = require('express');
 const router  = express.Router();
-const multer  = require('multer');
 const { authenticate, requireRegistered } = require('../middleware/auth');
-const { createDoctorNote, getDoctorNotes, getDoctorNoteById } = require('../controllers/doctorNoteController');
+const {
+  getPresignedUrl,
+  processDoctorNote,
+  getDoctorNotes,
+  getDoctorNoteById,
+} = require('../controllers/doctorNoteController');
 
-// 메모리 저장 (디스크 저장 불필요)
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 25 * 1024 * 1024 },  // 25MB (Whisper 최대 제한)
-  fileFilter: (req, file, cb) => {
-    const allowedExt = ['mp3', 'm4a', 'mp4', 'wav', 'webm', 'ogg', 'flac', 'mpeg', 'mpga'];
-    const ext = (file.originalname || '').split('.').pop().toLowerCase();
-    if (allowedExt.includes(ext)) {
-      cb(null, true);
-    } else {
-      cb(new Error(`지원하지 않는 파일 형식입니다. 지원 형식: ${allowedExt.join(', ')}`));
-    }
-  },
-});
+// Presigned PUT URL 발급 (클라이언트가 이 URL로 직접 S3에 업로드)
+router.get('/presigned-url', authenticate, requireRegistered, getPresignedUrl);
 
-// 진료 녹음 업로드 → AI 요약
-router.post('/', authenticate, requireRegistered, upload.single('audio'), createDoctorNote);
+// S3 업로드 완료 후 AI 처리 요청
+router.post('/process', authenticate, requireRegistered, processDoctorNote);
 
 // 진료 기록 목록
 router.get('/', authenticate, requireRegistered, getDoctorNotes);

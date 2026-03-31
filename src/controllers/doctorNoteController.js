@@ -1,7 +1,9 @@
-const OpenAI   = require('openai');
-const axios    = require('axios');
-const FormData = require('form-data');
-const { pool } = require('../config/database');
+const OpenAI                              = require('openai');
+const axios                               = require('axios');
+const FormData                            = require('form-data');
+const { pool }                            = require('../config/database');
+const { getPresignedUploadUrl, downloadFromS3 } = require('../utils/s3Uploader');
+const { parseScheduleText }               = require('./scheduleController');
 require('dotenv').config();
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -53,40 +55,74 @@ const SUMMARY_PROMPT = `당신은 노인을 위한 진료 내용 요약 AI입니
 // ─────────────────────────────────────────
 
 /**
- * POST /doctor-note
- * form-data: audio (파일), visit_date (선택, YYYY-MM-DD)
- *
- * 흐름: 오디오 파일 → Whisper(STT) → GPT(요약) → DB 저장
+ * GET /doctor-note/presigned-url?ext=mp3
+ * Presigned PUT URL 발급 (클라이언트가 직접 S3에 업로드)
  */
-async function createDoctorNote(req, res) {
-  if (!req.file) {
+async function getPresignedUrl(req, res) {
+  const ext = (req.query.ext || 'mp3').toLowerCase();
+  const allowedExt = ['mp3', 'm4a', 'mp4', 'wav', 'webm', 'ogg', 'flac'];
+  if (!allowedExt.includes(ext)) {
     return res.status(400).json({
       success: false,
-      message: '오디오 파일(audio)을 업로드해주세요.',
-      supported_formats: ['mp3', 'mp4', 'wav', 'm4a', 'webm', 'ogg'],
+      message: `지원하지 않는 확장자입니다. 지원 형식: ${allowedExt.join(', ')}`,
     });
   }
 
-  const visitDate = req.body.visit_date || null;
+  const mimeMap = {
+    'm4a': 'audio/mp4', 'mp3': 'audio/mpeg', 'mp4': 'audio/mp4',
+    'wav': 'audio/wav', 'webm': 'audio/webm', 'ogg': 'audio/ogg', 'flac': 'audio/flac',
+  };
+  const contentType = mimeMap[ext];
+  const s3Key = `recordings/user_${req.user.id}/${Date.now()}.${ext}`;
 
   try {
-    // ── STEP 1: Whisper로 음성 → 텍스트 변환 ──
-    // multer는 파일을 Buffer로 메모리에 저장. OpenAI SDK는 File 객체나 ReadableStream 필요.
-    const audioBuffer = req.file.buffer;
-    const fileName    = req.file.originalname || 'audio.mp3';
+    const { uploadUrl, fileUrl } = await getPresignedUploadUrl(s3Key, contentType);
+    return res.json({
+      success: true,
+      data: {
+        upload_url:   uploadUrl,   // 클라이언트가 PUT 요청할 URL (5분 유효)
+        s3_key:       s3Key,       // 업로드 후 /process 에 전달할 키
+        file_url:     fileUrl,     // 업로드 완료 후 최종 S3 URL
+        expires_in:   300,
+        content_type: contentType,
+      },
+    });
+  } catch (err) {
+    console.error('[getPresignedUrl 오류]', err.message);
+    return res.status(500).json({ success: false, message: '업로드 URL 생성에 실패했습니다.' });
+  }
+}
 
-    // 매직 바이트로 실제 포맷 감지 (확장자가 틀릴 수 있음)
-    const originalExt  = fileName.split('.').pop().toLowerCase();
-    const detectedExt  = detectAudioFormat(audioBuffer) || originalExt;
+/**
+ * POST /doctor-note/process
+ * body: { s3_key, visit_date }
+ *
+ * 흐름: S3에서 오디오 다운로드 → Whisper(STT) → GPT(요약) → DB 저장
+ */
+async function processDoctorNote(req, res) {
+  const { s3_key, visit_date } = req.body;
+
+  if (!s3_key) {
+    return res.status(400).json({ success: false, message: 's3_key가 필요합니다.' });
+  }
+
+  const visitDate = visit_date || null;
+
+  try {
+    // ── STEP 1: S3에서 오디오 다운로드 ──
+    const audioBuffer = await downloadFromS3(s3_key);
+    const audioUrl    = `https://${process.env.AWS_S3_BUCKET}.s3.${process.env.AWS_REGION}.amazonaws.com/${s3_key}`;
+
+    // 매직 바이트로 실제 포맷 감지
+    const originalExt = s3_key.split('.').pop().toLowerCase();
+    const detectedExt = detectAudioFormat(audioBuffer) || originalExt;
     const mimeMap = {
       'm4a': 'audio/mp4', 'mp3': 'audio/mpeg', 'mp4': 'audio/mp4',
-      'wav': 'audio/wav', 'webm': 'audio/webm', 'ogg': 'audio/ogg',
-      'flac': 'audio/flac',
+      'wav': 'audio/wav', 'webm': 'audio/webm', 'ogg': 'audio/ogg', 'flac': 'audio/flac',
     };
     const mimeType = mimeMap[detectedExt] || 'audio/mp4';
 
-    console.log('[Whisper 파일 감지]', { original: fileName, detected: detectedExt, mimeType, size: audioBuffer.length });
-
+    // ── STEP 2: Whisper로 음성 → 텍스트 변환 ──
     const form = new FormData();
     form.append('file', audioBuffer, {
       filename:    `audio.${detectedExt}`,
@@ -116,7 +152,6 @@ async function createDoctorNote(req, res) {
       throw axiosErr;
     }
 
-
     if (!originalText || originalText.trim() === '') {
       return res.status(422).json({
         success: false,
@@ -124,7 +159,7 @@ async function createDoctorNote(req, res) {
       });
     }
 
-    // ── STEP 2: GPT로 진료 내용 요약 ──
+    // ── STEP 3: GPT로 진료 내용 요약 ──
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
@@ -138,18 +173,45 @@ async function createDoctorNote(req, res) {
     const summaryRaw = completion.choices[0].message.content;
     const summary    = JSON.parse(summaryRaw);
 
-    // ── STEP 3: DB 저장 ──
+    // ── STEP 4: 진료 기록 DB 저장 ──
     const [result] = await pool.query(
-      `INSERT INTO doctor_notes (user_id, original_text, summary, visit_date)
-       VALUES (?, ?, ?, ?)`,
-      [req.user.id, originalText, JSON.stringify(summary), visitDate]
+      `INSERT INTO doctor_notes (user_id, audio_url, original_text, summary, visit_date)
+       VALUES (?, ?, ?, ?, ?)`,
+      [req.user.id, audioUrl, originalText, JSON.stringify(summary), visitDate]
     );
+    const noteId = result.insertId;
+
+    // ── STEP 5: 약 복용 일정 자동 저장 ──
+    const medications    = summary.medications || [];
+    const savedSchedules = [];
+
+    for (const med of medications) {
+      if (!med.name) continue;
+      const times = parseScheduleText(med.schedule);
+      const [schedResult] = await pool.query(
+        `INSERT INTO medicine_schedules
+         (user_id, note_id, medicine_name, morning, afternoon, evening, bedtime, schedule_text, caution)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          req.user.id, noteId, med.name,
+          times.morning, times.afternoon, times.evening, times.bedtime,
+          med.schedule || null, med.caution || null,
+        ]
+      );
+      savedSchedules.push({
+        id:            schedResult.insertId,
+        medicine_name: med.name,
+        schedule:      Object.entries(times).filter(([, v]) => v).map(([k]) => ({ morning:'아침', afternoon:'점심', evening:'저녁', bedtime:'취침 전' }[k])),
+        schedule_text: med.schedule,
+      });
+    }
 
     return res.json({
       success: true,
       data: {
-        id:            result.insertId,
+        id:            noteId,
         visit_date:    visitDate,
+        audio_url:     audioUrl,
         original_text: originalText,
         summary: {
           diagnosis:    summary.diagnosis   || null,
@@ -158,12 +220,13 @@ async function createDoctorNote(req, res) {
           next_visit:   summary.next_visit  || null,
           summary:      summary.summary     || null,
         },
+        saved_schedules: savedSchedules,
         created_at: new Date(Date.now() + 9 * 60 * 60 * 1000)
                       .toISOString().replace('T', ' ').substring(0, 19),
       },
     });
   } catch (err) {
-    console.error('[createDoctorNote 오류]', err.message);
+    console.error('[processDoctorNote 오류]', err.message);
     return res.status(500).json({
       success: false,
       message: '진료 내용 분석 중 오류가 발생했습니다.',
@@ -237,4 +300,4 @@ async function getDoctorNoteById(req, res) {
   }
 }
 
-module.exports = { createDoctorNote, getDoctorNotes, getDoctorNoteById };
+module.exports = { getPresignedUrl, processDoctorNote, getDoctorNotes, getDoctorNoteById };

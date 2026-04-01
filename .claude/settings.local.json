@@ -3,7 +3,9 @@
     "allow": [
       "WebFetch(domain:www.data.go.kr)",
       "Bash(npm list:*)",
-      "Bash(\"c:/Users/wwwe7/Desktop/ggachivalburBK/.env.example\":*)"
+      "Bash(\"c:/Users/wwwe7/Desktop/ggachivalburBK/.env.example\":*)",
+      "Bash(mysql -h ggachibal-db.cxwqissq6ao0.us-east-1.rds.amazonaws.com -u admin -p20081024 \"ggachibal-db\" -e \"ALTER TABLE users ADD COLUMN IF NOT EXISTS guardian_phone VARCHAR\\(20\\) COMMENT ''보호자 연락처'' AFTER guardian_email;\")",
+      "Bash(mysql -h ggachibal-db.cxwqissq6ao0.us-east-1.rds.amazonaws.com -u admin -p20081024 \"ggachibal-db\" -e \"ALTER TABLE users ADD COLUMN guardian_phone VARCHAR\\(20\\) AFTER guardian_email;\")"
     ]
   }
 }
